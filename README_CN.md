@@ -8,8 +8,10 @@
 
 [English](README.md) | 中文
 
-Kiro-Go Plus 基于 [Quorinex/Kiro-Go](https://github.com/Quorinex/Kiro-Go)
-修改，保留原项目的 MIT 许可证和版权声明。
+Kiro-Go Plus 由 [lizethhilkeor5-art](https://github.com/lizethhilkeor5-art)
+维护，基于 [Quorinex/Kiro-Go](https://github.com/Quorinex/Kiro-Go) 修改。
+项目依法保留原作者版权声明，同时在同一 MIT 许可证下增加当前维护者对
+Kiro-Go Plus 修改部分的版权声明。
 
 ## 功能特性
 
@@ -28,7 +30,7 @@ Kiro-Go Plus 基于 [Quorinex/Kiro-Go](https://github.com/Quorinex/Kiro-Go)
 ### Docker Compose（推荐）
 
 ```bash
-git clone https://github.com/alphanb002/kiro-go-plus.git
+git clone https://github.com/lizethhilkeor5-art/kiro-go-plus.git
 cd kiro-go-plus
 mkdir -p data
 docker-compose up -d
@@ -43,13 +45,13 @@ docker run -d \
   -e ADMIN_PASSWORD=your_secure_password \
   -v /path/to/data:/app/data \
   --restart unless-stopped \
-  ghcr.io/alphanb002/kiro-go-plus:latest
+  ghcr.io/lizethhilkeor5-art/kiro-go-plus:latest
 ```
 
 ### 源码编译
 
 ```bash
-git clone https://github.com/alphanb002/kiro-go-plus.git
+git clone https://github.com/lizethhilkeor5-art/kiro-go-plus.git
 cd kiro-go-plus
 go build -o kiro-go-plus .
 ./kiro-go-plus
@@ -119,7 +121,9 @@ curl http://localhost:8080/v1/chat/completions \
 
 ## 参与贡献
 
-欢迎友好交流。遇到问题时，建议先让 Claude Code、Codex 等工具帮忙排查一下，大部分问题都能自己解决。如果能直接提个 PR 就更好了。
+欢迎友好交流和提交 Pull Request。所有进入 `main` 的修改都必须通过
+Pull Request，并获得仓库代码所有者批准。具体要求见
+[CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 友情链接
 
@@ -131,4 +135,5 @@ curl http://localhost:8080/v1/chat/completions \
 
 ## 许可证
 
-[MIT](LICENSE)。本衍生项目保留 Quorinex 原始版权声明和许可证。
+[MIT](LICENSE)。本衍生项目保留 Quorinex 原始版权声明，并增加当前维护者
+对 Kiro-Go Plus 修改部分的版权声明。

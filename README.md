@@ -9,8 +9,11 @@ improved regional account support and account JSON importing.
 
 [English](README.md) | [中文](README_CN.md)
 
-Kiro-Go Plus is derived from [Quorinex/Kiro-Go](https://github.com/Quorinex/Kiro-Go)
-and retains its MIT license and copyright notice.
+Kiro-Go Plus is maintained by
+[lizethhilkeor5-art](https://github.com/lizethhilkeor5-art) and derived from
+[Quorinex/Kiro-Go](https://github.com/Quorinex/Kiro-Go). The original
+copyright notice is retained, while Kiro-Go Plus modifications are also
+copyrighted by the current maintainer under the same MIT license.
 
 ## Features
 
@@ -29,7 +32,7 @@ and retains its MIT license and copyright notice.
 ### Docker Compose (Recommended)
 
 ```bash
-git clone https://github.com/alphanb002/kiro-go-plus.git
+git clone https://github.com/lizethhilkeor5-art/kiro-go-plus.git
 cd kiro-go-plus
 mkdir -p data
 docker-compose up -d
@@ -44,13 +47,13 @@ docker run -d \
   -e ADMIN_PASSWORD=your_secure_password \
   -v /path/to/data:/app/data \
   --restart unless-stopped \
-  ghcr.io/alphanb002/kiro-go-plus:latest
+  ghcr.io/lizethhilkeor5-art/kiro-go-plus:latest
 ```
 
 ### Build from Source
 
 ```bash
-git clone https://github.com/alphanb002/kiro-go-plus.git
+git clone https://github.com/lizethhilkeor5-art/kiro-go-plus.git
 cd kiro-go-plus
 go build -o kiro-go-plus .
 ./kiro-go-plus
@@ -120,7 +123,9 @@ The setting takes effect immediately without restarting.
 
 ## Contributing
 
-Friendly discussion is welcome. If you run into issues, try asking Claude Code, Codex, or similar tools for help first — most problems can be solved that way. PRs are even better.
+Friendly discussion and pull requests are welcome. All changes to `main`
+require a pull request and approval from the repository code owner. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## Friend Links
 
@@ -133,4 +138,4 @@ For educational and research purposes only. Not affiliated with Amazon, AWS, or 
 ## License
 
 [MIT](LICENSE). This derivative preserves the original Quorinex copyright
-notice and license.
+notice and adds the maintainer's copyright for Kiro-Go Plus modifications.

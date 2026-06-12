@@ -94,11 +94,11 @@ body:
       label: Environment / 环境信息
       description: Please complete the following information. / 请补全下列信息。
       placeholder: |
-        - Version: v1.1.1 / ghcr.io/quorinex/kiro-go:latest / commit 1f54f29
+        - Version: v1.2.0 / ghcr.io/lizethhilkeor5-art/kiro-go-plus:latest / commit SHA
         - Deployment: Docker Compose / docker run / built from source
         - OS: Ubuntu 22.04 / Windows 11 / macOS 14
 
-        - 版本：v1.1.1 / ghcr.io/quorinex/kiro-go:latest / commit 1f54f29
+        - 版本：v1.2.0 / ghcr.io/lizethhilkeor5-art/kiro-go-plus:latest / commit SHA
         - 部署方式：Docker Compose / docker run / 源码编译
         - 操作系统：Ubuntu 22.04 / Windows 11 / macOS 14
 

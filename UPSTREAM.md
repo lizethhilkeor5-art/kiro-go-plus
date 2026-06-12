@@ -9,3 +9,6 @@ The original MIT license and Quorinex copyright notice are preserved in
 Kiro-Go Plus adds regional Kiro API endpoint selection, original account JSON
 import support, automatic CodeWhisperer profile resolution, and related
 cross-platform account handling improvements.
+
+Copyright for Kiro-Go Plus modifications is held by `lizethhilkeor5-art` under
+the same MIT license.
