@@ -3,6 +3,7 @@ package proxy
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"kiro-go-plus/auth"
 	"kiro-go-plus/config"
 	accountpool "kiro-go-plus/pool"
@@ -171,6 +172,84 @@ func TestApiImportCredentialsPreservesProvidedProfileArn(t *testing.T) {
 	}
 }
 
+func TestApiImportCredentialsAcceptsExternalIDPFullExport(t *testing.T) {
+	cfgFile := t.TempDir() + "/config.json"
+	if err := config.Init(cfgFile); err != nil {
+		t.Fatalf("config.Init: %v", err)
+	}
+	defer installCleanAuthClient(t)()
+
+	var gotForm string
+	var gotContentType string
+	fakeTokenEndpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotContentType = r.Header.Get("Content-Type")
+		body, _ := io.ReadAll(r.Body)
+		gotForm = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"at-external","refresh_token":"rt-external-rotated","expires_in":3600}`)
+	}))
+	defer fakeTokenEndpoint.Close()
+
+	h := &Handler{pool: accountpool.GetPool()}
+	body := fmt.Sprintf(`[{
+		"type":"kiro",
+		"email":"external@example.test",
+		"accessToken":"old-at",
+		"refreshToken":"rt-external",
+		"clientId":"client-external",
+		"clientSecret":"",
+		"region":"us-east-1",
+		"provider":"ExternalIdp",
+		"authMethod":"external_idp",
+		"profileArn":"arn:aws:codewhisperer:us-east-1:123:profile/ABC",
+		"tokenEndpoint":%q,
+		"issuerUrl":"https://idp.example.test/tenant/v2.0",
+		"scopes":"openid offline_access profile"
+	}]`, fakeTokenEndpoint.URL)
+	req := httptest.NewRequest("POST", "/auth/credentials", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.apiImportCredentials(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on successful external_idp import, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if gotContentType != "application/x-www-form-urlencoded" {
+		t.Fatalf("Content-Type = %q", gotContentType)
+	}
+	for _, want := range []string{
+		"client_id=client-external",
+		"grant_type=refresh_token",
+		"refresh_token=rt-external",
+		"scope=openid+offline_access+profile",
+	} {
+		if !strings.Contains(gotForm, want) {
+			t.Fatalf("external IdP refresh body %q missing %q", gotForm, want)
+		}
+	}
+
+	accs := config.GetAccounts()
+	if len(accs) != 1 {
+		t.Fatalf("expected exactly one account persisted, got %d", len(accs))
+	}
+	got := accs[0]
+	if got.AccessToken != "at-external" || got.RefreshToken != "rt-external-rotated" {
+		t.Fatalf("tokens not persisted from external IdP refresh: %+v", got)
+	}
+	if got.AuthMethod != "external_idp" || got.Provider != "ExternalIdp" {
+		t.Fatalf("external IdP method/provider not preserved: %+v", got)
+	}
+	if got.ClientID != "client-external" || got.ClientSecret != "" {
+		t.Fatalf("client fields not preserved: clientID=%q clientSecret=%q", got.ClientID, got.ClientSecret)
+	}
+	if got.TokenEndpoint != fakeTokenEndpoint.URL || got.IssuerURL != "https://idp.example.test/tenant/v2.0" || got.Scopes != "openid offline_access profile" {
+		t.Fatalf("external IdP metadata not preserved: %+v", got)
+	}
+	if got.ProfileArn != "arn:aws:codewhisperer:us-east-1:123:profile/ABC" {
+		t.Fatalf("profileArn = %q", got.ProfileArn)
+	}
+}
+
 func TestDecodeCredentialImportRequestAcceptsOriginalExportArray(t *testing.T) {
 	body := `[{"type":"kiro","access_token":"at","refresh_token":"rt","client_id":"client","client_secret":"secret","region":"eu-central-1","auth_method":"idc","profile_arn":"arn:aws:codewhisperer:eu-central-1:123:profile/ABC"}]`
 
@@ -185,6 +264,27 @@ func TestDecodeCredentialImportRequestAcceptsOriginalExportArray(t *testing.T) {
 		t.Fatalf("region/authMethod were not mapped: %+v", got)
 	}
 	if got.ProfileArn != "arn:aws:codewhisperer:eu-central-1:123:profile/ABC" {
+		t.Fatalf("profileArn = %q", got.ProfileArn)
+	}
+}
+
+func TestDecodeCredentialImportRequestAcceptsKAMExportEnvelope(t *testing.T) {
+	body := `{"version":"merged","accounts":[{"email":"external@example.test","idp":"Enterprise","profileArn":"arn:aws:codewhisperer:us-east-1:123:profile/ABC","credentials":{"accessToken":"at","refreshToken":"rt","clientId":"client","authMethod":"external_idp","provider":"ExternalIdp","region":"us-east-1","tokenEndpoint":"https://idp.example.test/token","issuerUrl":"https://idp.example.test","scopes":"openid offline_access"}}]}`
+
+	got, err := decodeCredentialImportRequest(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("decodeCredentialImportRequest: %v", err)
+	}
+	if got.AccessToken != "at" || got.RefreshToken != "rt" || got.ClientID != "client" {
+		t.Fatalf("credential fields were not mapped: %+v", got)
+	}
+	if got.AuthMethod != "external_idp" || got.Provider != "ExternalIdp" {
+		t.Fatalf("auth fields were not mapped: %+v", got)
+	}
+	if got.TokenEndpoint != "https://idp.example.test/token" || got.IssuerURL != "https://idp.example.test" || got.Scopes != "openid offline_access" {
+		t.Fatalf("external IdP metadata was not mapped: %+v", got)
+	}
+	if got.ProfileArn != "arn:aws:codewhisperer:us-east-1:123:profile/ABC" {
 		t.Fatalf("profileArn = %q", got.ProfileArn)
 	}
 }

@@ -2168,7 +2168,11 @@
             region: c.region || a.region,
             authMethod: c.authMethod || c.auth_method || a.authMethod || a.auth_method,
             provider: c.provider || a.provider || a.idp,
-            profileArn: c.profileArn || c.profile_arn || a.profileArn || a.profile_arn
+            profileArn: c.profileArn || c.profile_arn || a.profileArn || a.profile_arn,
+            startUrl: c.startUrl || c.start_url || a.startUrl || a.start_url,
+            tokenEndpoint: c.tokenEndpoint || c.token_endpoint || a.tokenEndpoint || a.token_endpoint,
+            issuerUrl: c.issuerUrl || c.issuer_url || a.issuerUrl || a.issuer_url,
+            scopes: c.scopes || a.scopes
           };
         });
       } else {
@@ -2196,14 +2200,25 @@
         clientId: rawItem.clientId || rawItem.client_id,
         clientSecret: rawItem.clientSecret || rawItem.client_secret,
         authMethod: rawItem.authMethod || rawItem.auth_method,
-        profileArn: rawItem.profileArn || rawItem.profile_arn
+        profileArn: rawItem.profileArn || rawItem.profile_arn,
+        startUrl: rawItem.startUrl || rawItem.start_url,
+        tokenEndpoint: rawItem.tokenEndpoint || rawItem.token_endpoint,
+        issuerUrl: rawItem.issuerUrl || rawItem.issuer_url,
+        scopes: rawItem.scopes
       };
       if (!item.refreshToken) { fail++; continue; }
-      let authMethod = item.authMethod || '';
-      if (item.clientId && item.clientSecret) authMethod = 'idc';
-      else if (!authMethod || authMethod === 'social') authMethod = 'social';
-      else authMethod = authMethod.toLowerCase() === 'idc' ? 'idc' : 'social';
+      let authMethod = String(item.authMethod || '').trim();
+      const authMethodKey = authMethod.toLowerCase().replace(/-/g, '_');
+      if (authMethodKey === 'external_idp' || authMethodKey === 'externalidp' || authMethodKey === 'external') authMethod = 'external_idp';
+      else if (authMethodKey === 'idc' || authMethodKey === 'builderid' || authMethodKey === 'builder_id') authMethod = 'idc';
+      else if (authMethodKey === 'enterprise' && item.tokenEndpoint && item.clientId && !item.clientSecret) authMethod = 'external_idp';
+      else if (authMethodKey === 'enterprise') authMethod = 'idc';
+      else if (authMethodKey === 'social' || authMethodKey === 'google' || authMethodKey === 'github') authMethod = 'social';
+      else if (item.tokenEndpoint && item.clientId) authMethod = 'external_idp';
+      else if (item.clientId && item.clientSecret) authMethod = 'idc';
+      else authMethod = 'social';
       let provider = item.provider || '';
+      if (!provider && authMethod === 'external_idp') provider = 'ExternalIdp';
       if (!provider && authMethod === 'social') provider = 'Google';
       if (!provider && authMethod === 'idc') provider = 'BuilderId';
       const payload = {
@@ -2213,7 +2228,11 @@
         clientSecret: item.clientSecret || '',
         authMethod, provider,
         region: item.region || 'us-east-1',
-        profileArn: item.profileArn || ''
+        profileArn: item.profileArn || '',
+        startUrl: item.startUrl || '',
+        tokenEndpoint: item.tokenEndpoint || '',
+        issuerUrl: item.issuerUrl || '',
+        scopes: item.scopes || ''
       };
       try {
         const res = await api('/auth/credentials', { method: 'POST', body: JSON.stringify(payload) });

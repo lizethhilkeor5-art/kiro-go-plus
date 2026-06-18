@@ -41,14 +41,18 @@ type Handler struct {
 }
 
 type credentialImportRequest struct {
-	AccessToken  string
-	RefreshToken string
-	ClientID     string
-	ClientSecret string
-	AuthMethod   string
-	Provider     string
-	Region       string
-	ProfileArn   string
+	AccessToken   string
+	RefreshToken  string
+	ClientID      string
+	ClientSecret  string
+	AuthMethod    string
+	Provider      string
+	Region        string
+	ProfileArn    string
+	TokenEndpoint string
+	IssuerURL     string
+	Scopes        string
+	StartUrl      string
 }
 
 func decodeCredentialImportRequest(r io.Reader) (credentialImportRequest, error) {
@@ -73,31 +77,91 @@ func decodeCredentialImportRequest(r io.Reader) (credentialImportRequest, error)
 	if err := json.Unmarshal(raw, &values); err != nil {
 		return credentialImportRequest{}, err
 	}
+	if accountsRaw, ok := values["accounts"]; ok {
+		var accounts []json.RawMessage
+		if err := json.Unmarshal(accountsRaw, &accounts); err != nil {
+			return credentialImportRequest{}, err
+		}
+		if len(accounts) != 1 {
+			return credentialImportRequest{}, fmt.Errorf("credential accounts array must contain exactly one account")
+		}
+		if err := json.Unmarshal(accounts[0], &values); err != nil {
+			return credentialImportRequest{}, err
+		}
+	}
+
+	credentialValues := map[string]json.RawMessage{}
+	if credentialsRaw, ok := values["credentials"]; ok {
+		_ = json.Unmarshal(credentialsRaw, &credentialValues)
+	}
 
 	readString := func(keys ...string) string {
 		for _, key := range keys {
-			value, ok := values[key]
-			if !ok {
-				continue
-			}
-			var result string
-			if json.Unmarshal(value, &result) == nil {
-				return result
+			for _, source := range []map[string]json.RawMessage{credentialValues, values} {
+				value, ok := source[key]
+				if !ok {
+					continue
+				}
+				var result string
+				if json.Unmarshal(value, &result) == nil {
+					return result
+				}
 			}
 		}
 		return ""
 	}
 
 	return credentialImportRequest{
-		AccessToken:  readString("accessToken", "access_token"),
-		RefreshToken: readString("refreshToken", "refresh_token"),
-		ClientID:     readString("clientId", "client_id"),
-		ClientSecret: readString("clientSecret", "client_secret"),
-		AuthMethod:   readString("authMethod", "auth_method"),
-		Provider:     readString("provider"),
-		Region:       readString("region"),
-		ProfileArn:   readString("profileArn", "profile_arn"),
+		AccessToken:   readString("accessToken", "access_token"),
+		RefreshToken:  readString("refreshToken", "refresh_token"),
+		ClientID:      readString("clientId", "client_id"),
+		ClientSecret:  readString("clientSecret", "client_secret"),
+		AuthMethod:    readString("authMethod", "auth_method"),
+		Provider:      readString("provider", "idp"),
+		Region:        readString("region"),
+		ProfileArn:    readString("profileArn", "profile_arn"),
+		TokenEndpoint: readString("tokenEndpoint", "token_endpoint"),
+		IssuerURL:     readString("issuerUrl", "issuer_url"),
+		Scopes:        readString("scopes"),
+		StartUrl:      readString("startUrl", "start_url"),
 	}, nil
+}
+
+func normalizeCredentialAuthMethod(req *credentialImportRequest) {
+	req.AuthMethod = strings.TrimSpace(req.AuthMethod)
+	lower := strings.ToLower(strings.ReplaceAll(req.AuthMethod, "-", "_"))
+	switch lower {
+	case "idc", "builderid", "builder_id":
+		req.AuthMethod = "idc"
+	case "social", "google", "github":
+		req.AuthMethod = "social"
+	case "external_idp", "externalidp", "external":
+		req.AuthMethod = "external_idp"
+	case "enterprise":
+		if req.TokenEndpoint != "" && req.ClientID != "" && req.ClientSecret == "" {
+			req.AuthMethod = "external_idp"
+		} else {
+			req.AuthMethod = "idc"
+		}
+	default:
+		if req.TokenEndpoint != "" && req.ClientID != "" {
+			req.AuthMethod = "external_idp"
+		} else if req.ClientID != "" && req.ClientSecret != "" {
+			req.AuthMethod = "idc"
+		} else {
+			req.AuthMethod = "social"
+		}
+	}
+	if req.Provider == "" {
+		switch req.AuthMethod {
+		case "external_idp":
+			req.Provider = "ExternalIdp"
+		case "social":
+			req.Provider = "Google"
+		case "idc":
+			req.Provider = "BuilderId"
+		}
+	}
 }
 
 type thinkingStreamSource int
@@ -2853,36 +2917,20 @@ func (h *Handler) apiImportCredentials(w http.ResponseWriter, r *http.Request) {
 	if req.Region == "" {
 		req.Region = "us-east-1"
 	}
-	if req.AuthMethod == "" {
-		if req.ClientID != "" {
-			req.AuthMethod = "idc"
-		} else {
-			req.AuthMethod = "social"
-		}
-	}
-	// 标准化 authMethod
-	switch strings.ToLower(req.AuthMethod) {
-	case "idc", "builderid", "enterprise":
-		req.AuthMethod = "idc"
-	case "social", "google", "github":
-		req.AuthMethod = "social"
-	default:
-		if req.ClientID != "" && req.ClientSecret != "" {
-			req.AuthMethod = "idc"
-		} else {
-			req.AuthMethod = "social"
-		}
-	}
+	normalizeCredentialAuthMethod(&req)
 
 	// 用 refreshToken 刷新获取新的 accessToken。导入必须以一次成功的刷新为前提：
 	// 本地缓存里的 accessToken 不携带可信的过期时间，盲猜短 TTL 会让账号在选号时
 	// 永远被跳过，导致后台/按需刷新都无法触发（详见 ensureValidToken 与 Pick 的过期判定）。
 	tempAccount := &config.Account{
-		RefreshToken: req.RefreshToken,
-		ClientID:     req.ClientID,
-		ClientSecret: req.ClientSecret,
-		AuthMethod:   req.AuthMethod,
-		Region:       req.Region,
+		RefreshToken:  req.RefreshToken,
+		ClientID:      req.ClientID,
+		ClientSecret:  req.ClientSecret,
+		AuthMethod:    req.AuthMethod,
+		Region:        req.Region,
+		TokenEndpoint: req.TokenEndpoint,
+		IssuerURL:     req.IssuerURL,
+		Scopes:        req.Scopes,
 	}
 	accessToken, newRefreshToken, expiresAt, newProfileArn, err := auth.RefreshToken(tempAccount)
 	if err != nil {
@@ -2903,19 +2951,23 @@ func (h *Handler) apiImportCredentials(w http.ResponseWriter, r *http.Request) {
 
 	// 创建账号
 	account := config.Account{
-		ID:           auth.GenerateAccountID(),
-		Email:        email,
-		AccessToken:  accessToken,
-		RefreshToken: req.RefreshToken,
-		ClientID:     req.ClientID,
-		ClientSecret: req.ClientSecret,
-		AuthMethod:   req.AuthMethod,
-		Provider:     req.Provider,
-		Region:       req.Region,
-		ExpiresAt:    expiresAt,
-		Enabled:      true,
-		MachineId:    config.GenerateMachineId(),
-		ProfileArn:   profileArn,
+		ID:            auth.GenerateAccountID(),
+		Email:         email,
+		AccessToken:   accessToken,
+		RefreshToken:  req.RefreshToken,
+		ClientID:      req.ClientID,
+		ClientSecret:  req.ClientSecret,
+		AuthMethod:    req.AuthMethod,
+		Provider:      req.Provider,
+		Region:        req.Region,
+		StartUrl:      req.StartUrl,
+		TokenEndpoint: req.TokenEndpoint,
+		IssuerURL:     req.IssuerURL,
+		Scopes:        req.Scopes,
+		ExpiresAt:     expiresAt,
+		Enabled:       true,
+		MachineId:     config.GenerateMachineId(),
+		ProfileArn:    profileArn,
 	}
 
 	// The common seven-field import format does not include profileArn. Resolve it
@@ -3284,6 +3336,10 @@ func (h *Handler) apiGetAccountFull(w http.ResponseWriter, r *http.Request, id s
 		"authMethod":        account.AuthMethod,
 		"provider":          account.Provider,
 		"region":            account.Region,
+		"startUrl":          account.StartUrl,
+		"tokenEndpoint":     account.TokenEndpoint,
+		"issuerUrl":         account.IssuerURL,
+		"scopes":            account.Scopes,
 		"expiresAt":         account.ExpiresAt,
 		"machineId":         account.MachineId,
 		"weight":            account.Weight,
@@ -3551,15 +3607,20 @@ func (h *Handler) apiExportAccounts(w http.ResponseWriter, r *http.Request) {
 
 	// 构建兼容 Kiro Account Manager 的导出格式
 	type ExportCredentials struct {
-		AccessToken  string `json:"accessToken"`
-		CsrfToken    string `json:"csrfToken"`
-		RefreshToken string `json:"refreshToken"`
-		ClientID     string `json:"clientId,omitempty"`
-		ClientSecret string `json:"clientSecret,omitempty"`
-		Region       string `json:"region,omitempty"`
-		ExpiresAt    int64  `json:"expiresAt"`
-		AuthMethod   string `json:"authMethod,omitempty"`
-		Provider     string `json:"provider,omitempty"`
+		AccessToken   string `json:"accessToken"`
+		CsrfToken     string `json:"csrfToken"`
+		RefreshToken  string `json:"refreshToken"`
+		ClientID      string `json:"clientId,omitempty"`
+		ClientSecret  string `json:"clientSecret,omitempty"`
+		Region        string `json:"region,omitempty"`
+		StartUrl      string `json:"startUrl,omitempty"`
+		ProfileArn    string `json:"profileArn,omitempty"`
+		TokenEndpoint string `json:"tokenEndpoint,omitempty"`
+		IssuerURL     string `json:"issuerUrl,omitempty"`
+		Scopes        string `json:"scopes,omitempty"`
+		ExpiresAt     int64  `json:"expiresAt"`
+		AuthMethod    string `json:"authMethod,omitempty"`
+		Provider      string `json:"provider,omitempty"`
 	}
 
 	type ExportSubscription struct {
@@ -3635,15 +3696,20 @@ func (h *Handler) apiExportAccounts(w http.ResponseWriter, r *http.Request) {
 			UserId:    a.UserId,
 			MachineId: a.MachineId,
 			Credentials: ExportCredentials{
-				AccessToken:  a.AccessToken,
-				CsrfToken:    "",
-				RefreshToken: a.RefreshToken,
-				ClientID:     a.ClientID,
-				ClientSecret: a.ClientSecret,
-				Region:       a.Region,
-				ExpiresAt:    a.ExpiresAt * 1000, // 转为毫秒时间戳
-				AuthMethod:   authMethod,
-				Provider:     a.Provider,
+				AccessToken:   a.AccessToken,
+				CsrfToken:     "",
+				RefreshToken:  a.RefreshToken,
+				ClientID:      a.ClientID,
+				ClientSecret:  a.ClientSecret,
+				Region:        a.Region,
+				StartUrl:      a.StartUrl,
+				ProfileArn:    a.ProfileArn,
+				TokenEndpoint: a.TokenEndpoint,
+				IssuerURL:     a.IssuerURL,
+				Scopes:        a.Scopes,
+				ExpiresAt:     a.ExpiresAt * 1000, // 转为毫秒时间戳
+				AuthMethod:    authMethod,
+				Provider:      a.Provider,
 			},
 			Subscription: ExportSubscription{
 				Type:  subType,
