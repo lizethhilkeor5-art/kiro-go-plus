@@ -25,6 +25,7 @@ copyrighted by the current maintainer under the same MIT license.
 - Support configuring outbound proxy (SOCKS5 / HTTP)
 - Region-aware Kiro management/runtime API endpoints
 - Direct import of original snake_case account JSON arrays
+- Direct import of Kiro Account Manager envelopes and enterprise `external_idp` full JSON
 - Automatic CodeWhisperer profile resolution when `profileArn` is absent
 
 ## Quick Start
@@ -58,6 +59,28 @@ cd kiro-go-plus
 go build -o kiro-go-plus .
 ./kiro-go-plus
 ```
+
+### Run on a Linux Server
+
+Linux servers can run Kiro-Go Plus from source or Docker. Set
+`ADMIN_PASSWORD` and keep the `data` directory persistent so accounts and
+settings survive restarts.
+
+```bash
+git clone https://github.com/lizethhilkeor5-art/kiro-go-plus.git
+cd kiro-go-plus
+mkdir -p data
+go build -o kiro-go-plus .
+ADMIN_PASSWORD='your_secure_password' ./kiro-go-plus
+```
+
+Admin panel:
+
+```text
+http://<server-ip>:8080/admin
+```
+
+For long-running deployments, use `systemd`, `screen`, `tmux`, or Docker.
 
 ### Deploy on Zeabur
 
@@ -103,6 +126,25 @@ curl http://localhost:8080/v1/chat/completions \
   -H "Authorization: Bearer any" \
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"Hello!"}]}'
 ```
+
+### Account JSON Import Notes
+
+Builder ID / IdC accounts can be imported from JSON containing `refreshToken`,
+`clientId`, `clientSecret`, `region`, and `profileArn`.
+
+Enterprise organization accounts are usually `external_idp` accounts and must
+keep the full JSON metadata, especially:
+
+- `refreshToken`
+- `clientId`
+- `tokenEndpoint`
+- `issuerUrl`
+- `scopes`
+- `profileArn` when available
+
+Do not convert enterprise accounts into the simplified seven-field format. That
+can drop `tokenEndpoint` and cause refresh HTTP 400 errors or missing
+`clientSecret` validation failures.
 
 ## Thinking Mode
 

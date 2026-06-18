@@ -7,6 +7,7 @@ import (
 	"io"
 	"kiro-go-plus/config"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -31,10 +32,14 @@ func RefreshToken(account *config.Account) (string, string, int64, string, error
 	}
 	client := GetAuthClientForProxy(proxyURL)
 
-	if account.AuthMethod == "social" {
+	switch strings.ToLower(strings.TrimSpace(account.AuthMethod)) {
+	case "social":
 		return refreshSocialToken(account.RefreshToken, client)
+	case "external_idp", "external-idp", "externalidp":
+		return refreshExternalIDPToken(account.RefreshToken, account.ClientID, account.TokenEndpoint, account.Scopes, client)
+	default:
+		return refreshOIDCToken(account.RefreshToken, account.ClientID, account.ClientSecret, account.Region, client)
 	}
-	return refreshOIDCToken(account.RefreshToken, account.ClientID, account.ClientSecret, account.Region, client)
 }
 
 // refreshOIDCToken IdC/Builder ID token 刷新
@@ -142,4 +147,66 @@ func refreshSocialToken(refreshToken string, client *http.Client) (string, strin
 
 	expiresAt := time.Now().Unix() + int64(result.ExpiresIn)
 	return result.AccessToken, result.RefreshToken, expiresAt, result.ProfileArn, nil
+}
+
+// refreshExternalIDPToken refreshes enterprise SSO tokens through the external
+// IdP OAuth token endpoint. This flow is a public client refresh and does not
+// have a clientSecret.
+func refreshExternalIDPToken(refreshToken, clientID, tokenEndpoint, scopes string, client *http.Client) (string, string, int64, string, error) {
+	refreshToken = strings.TrimSpace(refreshToken)
+	clientID = strings.TrimSpace(clientID)
+	tokenEndpoint = strings.TrimSpace(tokenEndpoint)
+	if refreshToken == "" {
+		return "", "", 0, "", fmt.Errorf("external IdP refresh requires refreshToken")
+	}
+	if clientID == "" {
+		return "", "", 0, "", fmt.Errorf("external IdP refresh requires clientId")
+	}
+	if tokenEndpoint == "" {
+		return "", "", 0, "", fmt.Errorf("external IdP refresh requires tokenEndpoint")
+	}
+
+	form := url.Values{}
+	form.Set("client_id", clientID)
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", refreshToken)
+	if strings.TrimSpace(scopes) != "" {
+		form.Set("scope", scopes)
+	}
+
+	req, err := http.NewRequest("POST", tokenEndpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", "", 0, "", err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", 0, "", err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	var result struct {
+		AccessToken      string `json:"access_token"`
+		RefreshToken     string `json:"refresh_token"`
+		ExpiresIn        int    `json:"expires_in"`
+		Error            string `json:"error"`
+		ErrorDescription string `json:"error_description"`
+	}
+	_ = json.Unmarshal(respBody, &result)
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 || result.AccessToken == "" {
+		if result.Error != "" {
+			return "", "", 0, "", fmt.Errorf("external IdP refresh failed: %d %s: %s", resp.StatusCode, result.Error, result.ErrorDescription)
+		}
+		return "", "", 0, "", fmt.Errorf("external IdP refresh failed: %d %s", resp.StatusCode, string(respBody))
+	}
+	if result.ExpiresIn <= 0 {
+		result.ExpiresIn = 3600
+	}
+
+	expiresAt := time.Now().Unix() + int64(result.ExpiresIn)
+	return result.AccessToken, result.RefreshToken, expiresAt, "", nil
 }

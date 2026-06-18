@@ -23,6 +23,7 @@ Kiro-Go Plus 修改部分的版权声明。
 - 支持设置出站代理（SOCKS5 / HTTP）
 - 根据账号区域自动选择 Kiro Management / Runtime API
 - 可直接导入 snake_case 字段的原始账号 JSON 数组
+- 可直接导入 Kiro Account Manager 导出结构和企业 `external_idp` 完整 JSON
 - 原文件缺少 `profileArn` 时自动解析 CodeWhisperer Profile
 
 ## 快速开始
@@ -56,6 +57,27 @@ cd kiro-go-plus
 go build -o kiro-go-plus .
 ./kiro-go-plus
 ```
+
+### Linux 服务器运行
+
+Linux 服务器可以直接源码编译运行，也可以用 Docker。推荐至少设置
+`ADMIN_PASSWORD`，并保留 `data` 目录用于持久化账号与配置。
+
+```bash
+git clone https://github.com/lizethhilkeor5-art/kiro-go-plus.git
+cd kiro-go-plus
+mkdir -p data
+go build -o kiro-go-plus .
+ADMIN_PASSWORD='your_secure_password' ./kiro-go-plus
+```
+
+后台地址：
+
+```text
+http://服务器IP:8080/admin
+```
+
+如需后台常驻运行，可用 `systemd`、`screen`、`tmux` 或 Docker 部署。
 
 ### 部署到 Zeabur
 
@@ -101,6 +123,23 @@ curl http://localhost:8080/v1/chat/completions \
   -H "Authorization: Bearer any" \
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"你好！"}]}'
 ```
+
+### 账号 JSON 导入说明
+
+普通 Builder ID / IdC 账号可以导入包含 `refreshToken`、`clientId`、
+`clientSecret`、`region`、`profileArn` 的 JSON。
+
+企业组织账号通常是 `external_idp`，需要保留完整 JSON 字段，尤其是：
+
+- `refreshToken`
+- `clientId`
+- `tokenEndpoint`
+- `issuerUrl`
+- `scopes`
+- `profileArn`（如有）
+
+不要把企业组织账号强行转换成只含七字段的简化格式，否则会丢失
+`tokenEndpoint`，刷新时可能出现 400 或 `clientSecret` 缺失错误。
 
 ## 思考模式
 
