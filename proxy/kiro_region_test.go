@@ -12,6 +12,13 @@ func TestKiroManagementAPIBaseUsesAccountRegion(t *testing.T) {
 	}
 }
 
+func TestKiroManagementAPIBaseUsesCodeWhispererForExternalIDP(t *testing.T) {
+	account := &config.Account{Region: "eu-central-1", AuthMethod: "external_idp"}
+	if got := kiroManagementAPIBase(account); got != "https://codewhisperer.eu-central-1.amazonaws.com" {
+		t.Fatalf("kiroManagementAPIBase = %q", got)
+	}
+}
+
 func TestRegionForAccountFallsBackToProfileArn(t *testing.T) {
 	account := &config.Account{ProfileArn: "arn:aws:codewhisperer:eu-central-1:123:profile/ABC"}
 	if got := regionForAccount(account); got != "eu-central-1" {

@@ -25,6 +25,12 @@ func regionForAccount(account *config.Account) string {
 }
 
 func kiroManagementAPIBase(account *config.Account) string {
+	if account != nil {
+		authMethod := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(account.AuthMethod), "-", "_"))
+		if authMethod == "external_idp" || authMethod == "externalidp" {
+			return fmt.Sprintf("https://codewhisperer.%s.amazonaws.com", regionForAccount(account))
+		}
+	}
 	return fmt.Sprintf("https://management.%s.kiro.dev", regionForAccount(account))
 }
 

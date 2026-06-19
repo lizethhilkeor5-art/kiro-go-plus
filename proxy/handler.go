@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -41,6 +42,7 @@ type Handler struct {
 }
 
 type credentialImportRequest struct {
+	Email         string
 	AccessToken   string
 	RefreshToken  string
 	ClientID      string
@@ -112,6 +114,7 @@ func decodeCredentialImportRequest(r io.Reader) (credentialImportRequest, error)
 	}
 
 	return credentialImportRequest{
+		Email:         readString("email"),
 		AccessToken:   readString("accessToken", "access_token"),
 		RefreshToken:  readString("refreshToken", "refresh_token"),
 		ClientID:      readString("clientId", "client_id"),
@@ -162,6 +165,28 @@ func normalizeCredentialAuthMethod(req *credentialImportRequest) {
 			req.Provider = "BuilderId"
 		}
 	}
+}
+
+func importedJWTExpiresAt(accessToken string) (int64, bool) {
+	parts := strings.Split(strings.TrimSpace(accessToken), ".")
+	if len(parts) != 3 {
+		return 0, false
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return 0, false
+	}
+
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return 0, false
+	}
+	exp, ok := claims["exp"].(float64)
+	if !ok || exp <= 0 {
+		return 0, false
+	}
+	return int64(exp), true
 }
 
 type thinkingStreamSource int
@@ -2919,31 +2944,47 @@ func (h *Handler) apiImportCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 	normalizeCredentialAuthMethod(&req)
 
-	// 用 refreshToken 刷新获取新的 accessToken。导入必须以一次成功的刷新为前提：
-	// 本地缓存里的 accessToken 不携带可信的过期时间，盲猜短 TTL 会让账号在选号时
-	// 永远被跳过，导致后台/按需刷新都无法触发（详见 ensureValidToken 与 Pick 的过期判定）。
-	tempAccount := &config.Account{
-		RefreshToken:  req.RefreshToken,
-		ClientID:      req.ClientID,
-		ClientSecret:  req.ClientSecret,
-		AuthMethod:    req.AuthMethod,
-		Region:        req.Region,
-		TokenEndpoint: req.TokenEndpoint,
-		IssuerURL:     req.IssuerURL,
-		Scopes:        req.Scopes,
-	}
-	accessToken, newRefreshToken, expiresAt, newProfileArn, err := auth.RefreshToken(tempAccount)
-	if err != nil {
-		w.WriteHeader(400)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Token refresh failed: " + err.Error()})
-		return
-	}
-	if newRefreshToken != "" {
-		req.RefreshToken = newRefreshToken
+	var accessToken, newRefreshToken, newProfileArn string
+	var expiresAt int64
+
+	// external_idp exports can contain the short-lived Kiro access token issued
+	// by the interactive login. Preserve it while it is still valid: refreshing
+	// it immediately can yield an IdP token without the same Kiro entitlement.
+	importedExpiresAt, importedTokenValid := importedJWTExpiresAt(req.AccessToken)
+	if req.AuthMethod == "external_idp" &&
+		importedTokenValid &&
+		importedExpiresAt > time.Now().Unix()+tokenRefreshSkewSeconds {
+		accessToken = strings.TrimSpace(req.AccessToken)
+		expiresAt = importedExpiresAt
+	} else {
+		// Other auth methods, expired external tokens, and opaque tokens still
+		// require a successful refresh before the account can be persisted.
+		tempAccount := &config.Account{
+			RefreshToken:  req.RefreshToken,
+			ClientID:      req.ClientID,
+			ClientSecret:  req.ClientSecret,
+			AuthMethod:    req.AuthMethod,
+			Region:        req.Region,
+			TokenEndpoint: req.TokenEndpoint,
+			IssuerURL:     req.IssuerURL,
+			Scopes:        req.Scopes,
+		}
+		accessToken, newRefreshToken, expiresAt, newProfileArn, err = auth.RefreshToken(tempAccount)
+		if err != nil {
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Token refresh failed: " + err.Error()})
+			return
+		}
+		if newRefreshToken != "" {
+			req.RefreshToken = newRefreshToken
+		}
 	}
 
 	// 获取用户信息
-	email, _, _ := auth.GetUserInfo(accessToken)
+	email := strings.TrimSpace(req.Email)
+	if email == "" {
+		email, _, _ = auth.GetUserInfo(accessToken)
+	}
 	profileArn := strings.TrimSpace(req.ProfileArn)
 	if profileArn == "" {
 		profileArn = newProfileArn
@@ -2976,6 +3017,10 @@ func (h *Handler) apiImportCredentials(w http.ResponseWriter, r *http.Request) {
 	if account.ProfileArn == "" {
 		if resolvedProfileArn, resolveErr := listAvailableProfilesWithRetry(&account); resolveErr == nil {
 			account.ProfileArn = resolvedProfileArn
+		} else if account.AuthMethod == "external_idp" {
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Profile resolution failed: " + resolveErr.Error()})
+			return
 		} else {
 			logger.Warnf("[ImportCredentials] Failed to resolve profile ARN for region %s: %v", account.Region, resolveErr)
 		}

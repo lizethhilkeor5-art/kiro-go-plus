@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,11 @@ import (
 	"testing"
 	"time"
 )
+
+func testJWTWithExpiry(expiresAt int64) string {
+	payload, _ := json.Marshal(map[string]interface{}{"exp": expiresAt})
+	return "header." + base64.RawURLEncoding.EncodeToString(payload) + ".signature"
+}
 
 // installCleanAuthClient replaces the global auth HTTP client with one whose
 // Transport does not consult http.ProxyFromEnvironment — that function caches
@@ -247,6 +253,75 @@ func TestApiImportCredentialsAcceptsExternalIDPFullExport(t *testing.T) {
 	}
 	if got.ProfileArn != "arn:aws:codewhisperer:us-east-1:123:profile/ABC" {
 		t.Fatalf("profileArn = %q", got.ProfileArn)
+	}
+}
+
+func TestApiImportCredentialsPreservesValidExternalIDPAccessToken(t *testing.T) {
+	cfgFile := t.TempDir() + "/config.json"
+	if err := config.Init(cfgFile); err != nil {
+		t.Fatalf("config.Init: %v", err)
+	}
+	defer installCleanAuthClient(t)()
+
+	tokenEndpointCalls := 0
+	fakeTokenEndpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tokenEndpointCalls++
+		http.Error(w, "{\"error\":\"refresh_must_not_run\"}", http.StatusBadRequest)
+	}))
+	defer fakeTokenEndpoint.Close()
+
+	expiresAt := time.Now().Unix() + 1800
+	accessToken := testJWTWithExpiry(expiresAt)
+	body, err := json.Marshal(map[string]interface{}{
+		"email":         "external@example.test",
+		"accessToken":   accessToken,
+		"refreshToken":  "rt-external",
+		"clientId":      "client-external",
+		"authMethod":    "external_idp",
+		"region":        "us-east-1",
+		"profileArn":    "arn:aws:codewhisperer:us-east-1:123:profile/ABC",
+		"tokenEndpoint": fakeTokenEndpoint.URL,
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	h := &Handler{pool: accountpool.GetPool()}
+	req := httptest.NewRequest("POST", "/auth/credentials", strings.NewReader(string(body)))
+	rec := httptest.NewRecorder()
+	h.apiImportCredentials(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on valid external_idp import, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if tokenEndpointCalls != 0 {
+		t.Fatalf("external IdP token endpoint called %d times; wanted 0", tokenEndpointCalls)
+	}
+
+	accs := config.GetAccounts()
+	if len(accs) != 1 {
+		t.Fatalf("expected exactly one account persisted, got %d", len(accs))
+	}
+	got := accs[0]
+	if got.Email != "external@example.test" {
+		t.Fatalf("email = %q", got.Email)
+	}
+	if got.AccessToken != accessToken {
+		t.Fatalf("interactive external IdP access token was replaced")
+	}
+	if got.RefreshToken != "rt-external" {
+		t.Fatalf("refreshToken = %q", got.RefreshToken)
+	}
+	if got.ExpiresAt != expiresAt {
+		t.Fatalf("ExpiresAt = %d, want %d", got.ExpiresAt, expiresAt)
+	}
+}
+
+func TestImportedJWTExpiresAtRejectsOpaqueAndMalformedTokens(t *testing.T) {
+	for _, token := range []string{"opaque", "a.not-base64.c", "a.e30.c"} {
+		if expiresAt, ok := importedJWTExpiresAt(token); ok {
+			t.Fatalf("importedJWTExpiresAt(%q) = (%d, true)", token, expiresAt)
+		}
 	}
 }
 

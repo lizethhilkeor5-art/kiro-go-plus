@@ -146,6 +146,9 @@ Do not convert enterprise accounts into the simplified seven-field format. That
 can drop `tokenEndpoint` and cause refresh HTTP 400 errors or missing
 `clientSecret` validation failures.
 
+For the complete Kiro IDE export, Kiro-Go Plus import, and validation workflow,
+see the Chinese guide: [Kiro JSON Export and Import Guide](docs/kiro-json-export-import-guide.md).
+
 ## Thinking Mode
 
 Append a suffix (default `-thinking`) to the model name, e.g. `claude-sonnet-4.5-thinking`. Claude-compatible requests that include a top-level `thinking` config such as `{"type":"enabled","budget_tokens":2048}` or `{"type":"adaptive"}` also enable thinking mode automatically. Configure output format in the admin panel under Settings - Thinking Mode.

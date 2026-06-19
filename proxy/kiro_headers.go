@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"kiro-go-plus/config"
 	"net/http"
+	"strings"
 )
 
 const (
@@ -59,6 +60,10 @@ func buildKiroHeaderValues(account *config.Account, host, apiName, sdkVersion, m
 func applyKiroBaseHeaders(req *http.Request, account *config.Account, values kiroHeaderValues) {
 	if account != nil && account.AccessToken != "" {
 		req.Header.Set("Authorization", "Bearer "+account.AccessToken)
+		authMethod := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(account.AuthMethod), "-", "_"))
+		if authMethod == "external_idp" || authMethod == "externalidp" {
+			req.Header.Set("TokenType", "EXTERNAL_IDP")
+		}
 	}
 	req.Header.Set("User-Agent", values.UserAgent)
 	req.Header.Set("x-amz-user-agent", values.AmzUserAgent)
