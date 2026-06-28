@@ -28,7 +28,9 @@ func kiroManagementAPIBase(account *config.Account) string {
 	if account != nil {
 		authMethod := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(account.AuthMethod), "-", "_"))
 		if authMethod == "external_idp" || authMethod == "externalidp" {
-			return fmt.Sprintf("https://codewhisperer.%s.amazonaws.com", regionForAccount(account))
+			// Amazon Q runtime host (q.<region>); the legacy codewhisperer.<region>
+			// host is retired and NXDOMAIN outside us-east-1 (e.g. eu-central-1).
+			return fmt.Sprintf("https://q.%s.amazonaws.com", regionForAccount(account))
 		}
 	}
 	return fmt.Sprintf("https://management.%s.kiro.dev", regionForAccount(account))

@@ -364,6 +364,95 @@ func TestDecodeCredentialImportRequestAcceptsKAMExportEnvelope(t *testing.T) {
 	}
 }
 
+func TestApiExportAccountsDuplicatesExternalIDPFieldsForKAMRS(t *testing.T) {
+	cfgFile := t.TempDir() + "/config.json"
+	if err := config.Init(cfgFile); err != nil {
+		t.Fatalf("config.Init: %v", err)
+	}
+
+	if err := config.AddAccount(config.Account{
+		ID:                "external-id",
+		Email:             "external@example.test",
+		AccessToken:       "at",
+		RefreshToken:      "rt",
+		ClientID:          "client",
+		ClientSecret:      "",
+		AuthMethod:        "external_idp",
+		Provider:          "ExternalIdp",
+		Region:            "us-east-1",
+		StartUrl:          "https://idp.example.test/start",
+		TokenEndpoint:     "https://idp.example.test/token",
+		IssuerURL:         "https://idp.example.test",
+		Scopes:            "openid offline_access",
+		ProfileArn:        "arn:aws:codewhisperer:us-east-1:123:profile/ABC",
+		ExpiresAt:         1780000000,
+		Enabled:           true,
+		MachineId:         "machine",
+		SubscriptionType:  "PRO",
+		SubscriptionTitle: "KIRO PRO MAX",
+		UsageLimit:        5000,
+	}); err != nil {
+		t.Fatalf("config.AddAccount: %v", err)
+	}
+
+	h := &Handler{}
+	req := httptest.NewRequest("POST", "/admin/api/export", strings.NewReader(`{"ids":["external-id"]}`))
+	rec := httptest.NewRecorder()
+	h.apiExportAccounts(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var exported struct {
+		Accounts []struct {
+			Email           string `json:"email"`
+			AuthMethod      string `json:"authMethod"`
+			AuthMethodSnake string `json:"auth_method"`
+			Provider        string `json:"provider"`
+			RefreshToken    string `json:"refreshToken"`
+			ClientID        string `json:"clientId"`
+			ClientSecret    string `json:"clientSecret"`
+			ProfileArn      string `json:"profileArn"`
+			TokenEndpoint   string `json:"tokenEndpoint"`
+			Credentials     struct {
+				AuthMethod    string `json:"authMethod"`
+				Provider      string `json:"provider"`
+				RefreshToken  string `json:"refreshToken"`
+				ClientID      string `json:"clientId"`
+				ClientSecret  string `json:"clientSecret"`
+				ProfileArn    string `json:"profileArn"`
+				TokenEndpoint string `json:"tokenEndpoint"`
+			} `json:"credentials"`
+		} `json:"accounts"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &exported); err != nil {
+		t.Fatalf("decode export: %v", err)
+	}
+	if len(exported.Accounts) != 1 {
+		t.Fatalf("accounts len = %d", len(exported.Accounts))
+	}
+	got := exported.Accounts[0]
+	if got.Email != "external@example.test" || got.AuthMethod != "external_idp" || got.AuthMethodSnake != "external_idp" {
+		t.Fatalf("top-level account metadata not exported for KAM-rs: %+v", got)
+	}
+	if got.RefreshToken != "rt" || got.ClientID != "client" || got.ClientSecret != "" {
+		t.Fatalf("top-level credentials not duplicated correctly: %+v", got)
+	}
+	if got.ProfileArn != "arn:aws:codewhisperer:us-east-1:123:profile/ABC" || got.TokenEndpoint != "https://idp.example.test/token" {
+		t.Fatalf("top-level external IdP metadata missing: %+v", got)
+	}
+	if got.Credentials.AuthMethod != "external_idp" || got.Credentials.Provider != "ExternalIdp" {
+		t.Fatalf("nested auth metadata missing: %+v", got.Credentials)
+	}
+	if got.Credentials.RefreshToken != "rt" || got.Credentials.ClientID != "client" || got.Credentials.ClientSecret != "" {
+		t.Fatalf("nested credentials missing: %+v", got.Credentials)
+	}
+	if got.Credentials.ProfileArn != "arn:aws:codewhisperer:us-east-1:123:profile/ABC" || got.Credentials.TokenEndpoint != "https://idp.example.test/token" {
+		t.Fatalf("nested external IdP metadata missing: %+v", got.Credentials)
+	}
+}
+
 func TestDecodeCredentialImportRequestRejectsMultiAccountArray(t *testing.T) {
 	_, err := decodeCredentialImportRequest(strings.NewReader(`[{"refresh_token":"one"},{"refresh_token":"two"}]`))
 	if err == nil || !strings.Contains(err.Error(), "exactly one") {

@@ -3681,19 +3681,41 @@ func (h *Handler) apiExportAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type ExportAccount struct {
-		ID           string             `json:"id"`
-		Email        string             `json:"email"`
-		Nickname     string             `json:"nickname,omitempty"`
-		Idp          string             `json:"idp"`
-		UserId       string             `json:"userId,omitempty"`
-		MachineId    string             `json:"machineId,omitempty"`
-		Credentials  ExportCredentials  `json:"credentials"`
-		Subscription ExportSubscription `json:"subscription"`
-		Usage        ExportUsage        `json:"usage"`
-		Tags         []string           `json:"tags"`
-		Status       string             `json:"status"`
-		CreatedAt    int64              `json:"createdAt"`
-		LastUsedAt   int64              `json:"lastUsedAt"`
+		ID              string             `json:"id"`
+		Email           string             `json:"email"`
+		Nickname        string             `json:"nickname,omitempty"`
+		Idp             string             `json:"idp"`
+		Provider        string             `json:"provider,omitempty"`
+		AuthMethod      string             `json:"authMethod,omitempty"`
+		AuthMethodSk    string             `json:"auth_method,omitempty"`
+		UserId          string             `json:"userId,omitempty"`
+		MachineId       string             `json:"machineId,omitempty"`
+		AccessToken     string             `json:"accessToken,omitempty"`
+		RefreshToken    string             `json:"refreshToken,omitempty"`
+		ClientID        string             `json:"clientId,omitempty"`
+		ClientSecret    string             `json:"clientSecret"`
+		Region          string             `json:"region,omitempty"`
+		StartUrl        string             `json:"startUrl,omitempty"`
+		ProfileArn      string             `json:"profileArn,omitempty"`
+		TokenEndpoint   string             `json:"tokenEndpoint,omitempty"`
+		IssuerURL       string             `json:"issuerUrl,omitempty"`
+		Scopes          string             `json:"scopes,omitempty"`
+		ExpiresAt       int64              `json:"expiresAt,omitempty"`
+		AccessTokenSk   string             `json:"access_token,omitempty"`
+		RefreshTokenSk  string             `json:"refresh_token,omitempty"`
+		ClientIDSk      string             `json:"client_id,omitempty"`
+		ClientSecretSk  string             `json:"client_secret"`
+		ProfileArnSk    string             `json:"profile_arn,omitempty"`
+		TokenEndpointSk string             `json:"token_endpoint,omitempty"`
+		IssuerURLSk     string             `json:"issuer_url,omitempty"`
+		StartUrlSk      string             `json:"start_url,omitempty"`
+		Credentials     ExportCredentials  `json:"credentials"`
+		Subscription    ExportSubscription `json:"subscription"`
+		Usage           ExportUsage        `json:"usage"`
+		Tags            []string           `json:"tags"`
+		Status          string             `json:"status"`
+		CreatedAt       int64              `json:"createdAt"`
+		LastUsedAt      int64              `json:"lastUsedAt"`
 	}
 
 	type ExportData struct {
@@ -3706,20 +3728,30 @@ func (h *Handler) apiExportAccounts(w http.ResponseWriter, r *http.Request) {
 
 	exportAccounts := make([]ExportAccount, 0, len(accounts))
 	for _, a := range accounts {
-		// 映射 provider 到 idp
-		idp := a.Provider
-		if idp == "" {
-			if a.AuthMethod == "social" {
-				idp = "Google"
-			} else {
-				idp = "BuilderId"
-			}
-		}
-
 		// 映射 authMethod
 		authMethod := a.AuthMethod
-		if authMethod == "idc" {
-			authMethod = "IdC"
+		credentialAuthMethod := authMethod
+		if credentialAuthMethod == "idc" {
+			credentialAuthMethod = "IdC"
+		}
+		expiresAtMillis := a.ExpiresAt * 1000
+
+		// 映射 provider 到 idp。Enterprise/external_idp 不能被降级成 BuilderId，
+		// 否则一些 KAM/Kiro-rs 导入器会按 idc 路径要求 clientSecret。
+		provider := a.Provider
+		if provider == "" {
+			switch authMethod {
+			case "external_idp":
+				provider = "ExternalIdp"
+			case "social":
+				provider = "Google"
+			default:
+				provider = "BuilderId"
+			}
+		}
+		idp := provider
+		if authMethod == "external_idp" {
+			idp = "Enterprise"
 		}
 
 		// 映射订阅类型
@@ -3734,12 +3766,34 @@ func (h *Handler) apiExportAccounts(w http.ResponseWriter, r *http.Request) {
 		}
 
 		exportAccounts = append(exportAccounts, ExportAccount{
-			ID:        a.ID,
-			Email:     a.Email,
-			Nickname:  a.Nickname,
-			Idp:       idp,
-			UserId:    a.UserId,
-			MachineId: a.MachineId,
+			ID:              a.ID,
+			Email:           a.Email,
+			Nickname:        a.Nickname,
+			Idp:             idp,
+			Provider:        provider,
+			AuthMethod:      authMethod,
+			AuthMethodSk:    authMethod,
+			UserId:          a.UserId,
+			MachineId:       a.MachineId,
+			AccessToken:     a.AccessToken,
+			RefreshToken:    a.RefreshToken,
+			ClientID:        a.ClientID,
+			ClientSecret:    a.ClientSecret,
+			Region:          a.Region,
+			StartUrl:        a.StartUrl,
+			ProfileArn:      a.ProfileArn,
+			TokenEndpoint:   a.TokenEndpoint,
+			IssuerURL:       a.IssuerURL,
+			Scopes:          a.Scopes,
+			ExpiresAt:       expiresAtMillis,
+			AccessTokenSk:   a.AccessToken,
+			RefreshTokenSk:  a.RefreshToken,
+			ClientIDSk:      a.ClientID,
+			ClientSecretSk:  a.ClientSecret,
+			ProfileArnSk:    a.ProfileArn,
+			TokenEndpointSk: a.TokenEndpoint,
+			IssuerURLSk:     a.IssuerURL,
+			StartUrlSk:      a.StartUrl,
 			Credentials: ExportCredentials{
 				AccessToken:   a.AccessToken,
 				CsrfToken:     "",
@@ -3752,9 +3806,9 @@ func (h *Handler) apiExportAccounts(w http.ResponseWriter, r *http.Request) {
 				TokenEndpoint: a.TokenEndpoint,
 				IssuerURL:     a.IssuerURL,
 				Scopes:        a.Scopes,
-				ExpiresAt:     a.ExpiresAt * 1000, // 转为毫秒时间戳
-				AuthMethod:    authMethod,
-				Provider:      a.Provider,
+				ExpiresAt:     expiresAtMillis,
+				AuthMethod:    credentialAuthMethod,
+				Provider:      provider,
 			},
 			Subscription: ExportSubscription{
 				Type:  subType,

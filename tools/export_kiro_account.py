@@ -16,7 +16,8 @@ import re
 import sys
 import urllib.error
 import urllib.request
-from datetime import date
+import uuid
+from datetime import date, datetime, timezone
 from typing import Any
 
 CACHE_DIR = os.path.join(os.path.expanduser("~"), ".aws", "sso", "cache")
@@ -198,6 +199,110 @@ def build_full_record(
     return record, profile_note
 
 
+def expires_at_millis(value: Any) -> int:
+    if isinstance(value, (int, float)):
+        timestamp = int(value)
+        return timestamp if timestamp > 10_000_000_000 else timestamp * 1000
+    if isinstance(value, str) and value.strip():
+        text = value.strip()
+        if text.isdigit():
+            return expires_at_millis(int(text))
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return int(parsed.timestamp() * 1000)
+        except ValueError:
+            return 0
+    return 0
+
+
+def build_kam_rs_account(record: dict[str, Any]) -> dict[str, Any]:
+    auth_method = normalize_auth_method(first_string(record, "authMethod", "auth_method"))
+    provider = first_string(record, "provider") or ("ExternalIdp" if auth_method == "external_idp" else "BuilderId")
+    email = first_string(record, "email")
+    region = first_string(record, "region") or DEFAULT_REGION
+    start_url = first_string(record, "startUrl", "start_url")
+    profile_arn = first_string(record, "profileArn", "profile_arn")
+    token_endpoint = first_string(record, "tokenEndpoint", "token_endpoint")
+    issuer_url = first_string(record, "issuerUrl", "issuer_url")
+    scopes = first_string(record, "scopes")
+    access_token = first_string(record, "accessToken", "access_token")
+    refresh_token = first_string(record, "refreshToken", "refresh_token")
+    client_id = first_string(record, "clientId", "client_id")
+    client_secret = first_string(record, "clientSecret", "client_secret")
+    expires_at = expires_at_millis(record.get("expiresAt", record.get("expires_at", 0)))
+
+    credentials = {
+        "accessToken": access_token,
+        "csrfToken": "",
+        "refreshToken": refresh_token,
+        "clientId": client_id,
+        "clientSecret": client_secret,
+        "region": region,
+        "startUrl": start_url,
+        "profileArn": profile_arn,
+        "tokenEndpoint": token_endpoint,
+        "issuerUrl": issuer_url,
+        "scopes": scopes,
+        "expiresAt": expires_at,
+        "authMethod": auth_method,
+        "provider": provider,
+    }
+
+    now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+    account = {
+        "id": first_string(record, "id") or str(uuid.uuid4()),
+        "email": email,
+        "nickname": email,
+        "idp": "Enterprise" if auth_method == "external_idp" else provider,
+        "provider": provider,
+        "authMethod": auth_method,
+        "auth_method": auth_method,
+        "userId": first_string(record, "userId", "user_id"),
+        "machineId": first_string(record, "machineId", "machine_id") or str(uuid.uuid4()),
+        "credentials": credentials,
+        "subscription": {"type": "", "title": ""},
+        "usage": {"current": 0, "limit": 0, "percentUsed": 0, "lastUpdated": now_ms},
+        "tags": [],
+        "status": "active",
+        "createdAt": now_ms,
+        "lastUsedAt": now_ms,
+        "password": None,
+    }
+
+    # Duplicate credential fields at the top level for older KAM/Kiro-rs
+    # importers that inspect only account-level keys before deciding auth type.
+    for key in (
+        "accessToken",
+        "refreshToken",
+        "clientId",
+        "clientSecret",
+        "region",
+        "startUrl",
+        "profileArn",
+        "tokenEndpoint",
+        "issuerUrl",
+        "scopes",
+        "expiresAt",
+    ):
+        account[key] = credentials[key]
+    aliases = {
+        "access_token": "accessToken",
+        "refresh_token": "refreshToken",
+        "client_id": "clientId",
+        "client_secret": "clientSecret",
+        "profile_arn": "profileArn",
+        "token_endpoint": "tokenEndpoint",
+        "issuer_url": "issuerUrl",
+        "start_url": "startUrl",
+    }
+    for snake_key, camel_key in aliases.items():
+        account[snake_key] = account.get(camel_key, "")
+
+    return account
+
+
 def dedupe_accounts(accounts: list[dict[str, Any]], record: dict[str, Any]) -> list[dict[str, Any]]:
     rt = first_string(record, "refreshToken", "refresh_token")
     email = first_string(record, "email")
@@ -217,6 +322,8 @@ def load_existing(path: str, append: bool) -> list[dict[str, Any]]:
             existing = json.load(f)
         if isinstance(existing, list):
             return [item for item in existing if isinstance(item, dict)]
+        if isinstance(existing, dict) and isinstance(existing.get("accounts"), list):
+            return [item for item in existing["accounts"] if isinstance(item, dict)]
     except (OSError, json.JSONDecodeError):
         pass
     return []
@@ -231,7 +338,12 @@ def safe_tail(value: str, head: int = 12, tail: int = 6) -> str:
 
 
 def default_output_path(script_dir: str, fmt: str) -> str:
-    name = "kiro-full-accounts" if fmt == "full" else "kiro-accounts"
+    if fmt == "full":
+        name = "kiro-full-accounts"
+    elif fmt == "kam-rs":
+        name = "kiro-kam-rs-accounts"
+    else:
+        name = "kiro-accounts"
     return os.path.join(script_dir, f"{name}-{date.today().isoformat()}.json")
 
 
@@ -242,7 +354,12 @@ def main() -> int:
     ap.add_argument("-o", "--out", help="output JSON file")
     ap.add_argument("--cache-file", default=TOKEN_FILE, help="path to kiro-auth-token.json")
     ap.add_argument("--append", action="store_true", help="append to existing output, deduped by email/refreshToken")
-    ap.add_argument("--format", choices=("full", "minimal"), default="full", help="output format; default: full")
+    ap.add_argument(
+        "--format",
+        choices=("full", "minimal", "kam-rs"),
+        default="full",
+        help="output format; default: full. Use kam-rs for KAM/Kiro-rs envelope with credentials and external_idp fields duplicated at top level.",
+    )
     ap.add_argument("--region", default="", help="fallback Kiro region when cache has none; default: us-east-1")
     ap.add_argument("--profile-arn", default="", help="manually set profileArn")
     ap.add_argument("--no-fetch-profile", action="store_true", help="do not call ListAvailableProfiles")
@@ -276,12 +393,25 @@ def main() -> int:
         )
 
     accounts = load_existing(output_path, args.append)
-    accounts = dedupe_accounts(accounts, record)
-    accounts.append(record)
+    if args.format == "kam-rs":
+        kam_account = build_kam_rs_account(record)
+        accounts = dedupe_accounts(accounts, kam_account)
+        accounts.append(kam_account)
+        output_data: Any = {
+            "version": "merged",
+            "exportedAt": int(datetime.now(tz=timezone.utc).timestamp() * 1000),
+            "accounts": accounts,
+            "groups": [],
+            "tags": [],
+        }
+    else:
+        accounts = dedupe_accounts(accounts, record)
+        accounts.append(record)
+        output_data = accounts
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(accounts, f, ensure_ascii=False, indent=2)
+        json.dump(output_data, f, ensure_ascii=False, indent=2)
     os.chmod(output_path, 0o600)
 
     print("Exported Kiro account:")

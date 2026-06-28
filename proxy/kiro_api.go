@@ -186,12 +186,36 @@ func isTransientProfileFetchError(err error) bool {
 }
 
 func listAvailableProfiles(account *config.Account) (string, error) {
-	req, err := http.NewRequest("POST", fmt.Sprintf("%s/ListAvailableProfiles", kiroManagementAPIBase(account)), strings.NewReader(`{"maxResults":10}`))
-	if err != nil {
-		return "", err
+	authMethod := ""
+	if account != nil {
+		authMethod = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(account.AuthMethod), "-", "_"))
 	}
-	setKiroHeaders(req, account)
-	req.Header.Set("Content-Type", "application/json")
+	isExternalIDP := authMethod == "external_idp" || authMethod == "externalidp"
+
+	var req *http.Request
+	var err error
+	if isExternalIDP {
+		// Amazon Q uses the AWS-JSON RPC protocol: POST "/" with X-Amz-Target.
+		// External IdP tokens MUST send TokenType: EXTERNAL_IDP or the profile
+		// list silently comes back empty.
+		u := fmt.Sprintf("https://q.%s.amazonaws.com/", regionForAccount(account))
+		req, err = http.NewRequest("POST", u, strings.NewReader(`{}`))
+		if err != nil {
+			return "", err
+		}
+		setKiroHeaders(req, account)
+		req.Header.Set("Content-Type", "application/x-amz-json-1.0")
+		req.Header.Set("Accept", "application/x-amz-json-1.0")
+		req.Header.Set("X-Amz-Target", "AmazonCodeWhispererService.ListAvailableProfiles")
+		req.Header.Set("TokenType", "EXTERNAL_IDP")
+	} else {
+		req, err = http.NewRequest("POST", fmt.Sprintf("%s/ListAvailableProfiles", kiroManagementAPIBase(account)), strings.NewReader(`{"maxResults":10}`))
+		if err != nil {
+			return "", err
+		}
+		setKiroHeaders(req, account)
+		req.Header.Set("Content-Type", "application/json")
+	}
 
 	resp, err := GetRestClientForProxy(ResolveAccountProxyURL(account)).Do(req)
 	if err != nil {
