@@ -18,6 +18,10 @@ const defaultPromptCacheTTL = 1 * time.Hour
 // 这套缓存是本地计费模拟(未转发上游),全局共享可大幅提升命中率(缓存读$0.5 替代缓存写$7.35)。
 const poolGlobalCacheKey = "__pool_global__"
 
+// autoInjectPromptCache：客户端没带 cache_control 时,自动把消息边界当作缓存点。
+// 让裸调请求(OpenAI兼容/不发缓存标记的客户端)也能命中缓存,命中率拉满("90%高缓")。
+const autoInjectPromptCache = true
+
 // Anthropic requires cached prefixes to reach a minimum token count before
 // caching takes effect. Breakpoints below this threshold are excluded from
 // matching and storage to avoid reporting unrealistic 100% cache hits on
@@ -84,6 +88,22 @@ func (t *promptCacheTracker) BuildClaudeProfile(req *ClaudeRequest, totalInputTo
 	cumulativeTokens := 0
 	var activeTTL time.Duration
 
+	// 主动缓存:若整个请求没有任何显式 cache_control,则自动启用——
+	// 让每个消息边界成为缓存点(TTL 默认1h),裸调请求也能命中。
+	autoTTL := time.Duration(0)
+	if autoInjectPromptCache {
+		hasExplicit := false
+		for _, b := range blocks {
+			if b.TTL > 0 {
+				hasExplicit = true
+				break
+			}
+		}
+		if !hasExplicit {
+			autoTTL = defaultPromptCacheTTL
+		}
+	}
+
 	for _, block := range blocks {
 		canonical := canonicalizeCacheValue(block.Value)
 		writeHashChunk(hasher, canonical)
@@ -98,8 +118,13 @@ func (t *promptCacheTracker) BuildClaudeProfile(req *ClaudeRequest, totalInputTo
 		if block.TTL > 0 {
 			breakpointTTL = block.TTL
 			activeTTL = block.TTL
-		} else if block.IsMessageEnd && activeTTL > 0 {
-			breakpointTTL = activeTTL
+		} else if block.IsMessageEnd {
+			if activeTTL > 0 {
+				breakpointTTL = activeTTL
+			} else if autoTTL > 0 {
+				// 主动注入:无显式缓存标记时,消息边界自动成为缓存点
+				breakpointTTL = autoTTL
+			}
 		}
 
 		if breakpointTTL <= 0 {
