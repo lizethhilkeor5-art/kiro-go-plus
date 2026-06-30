@@ -13,6 +13,11 @@ import (
 
 const defaultPromptCacheTTL = 5 * time.Minute
 
+// 号池轮询会换账号。缓存若按账号各存一份,换号后写入的缓存永远等不到同账号
+// 复用 → 全是写、零命中读。用全局 key 让整个号池共享同一张缓存表,
+// 任意账号写入的前缀,其它账号的相同前缀也能命中读。
+const poolGlobalCacheKey = "__pool_global__"
+
 // Anthropic requires cached prefixes to reach a minimum token count before
 // caching takes effect. Breakpoints below this threshold are excluded from
 // matching and storage to avoid reporting unrealistic 100% cache hits on
@@ -139,7 +144,7 @@ func (t *promptCacheTracker) Compute(accountID string, profile *promptCacheProfi
 	defer t.mu.Unlock()
 	t.pruneExpiredLocked(now)
 
-	entries := t.entriesByAccount[accountID]
+	entries := t.entriesByAccount[poolGlobalCacheKey]
 	if len(entries) == 0 {
 		// First request for this account: report creation only if above threshold.
 		effectiveCreation := lastTokens
@@ -204,10 +209,10 @@ func (t *promptCacheTracker) Update(accountID string, profile *promptCacheProfil
 	defer t.mu.Unlock()
 	t.pruneExpiredLocked(now)
 
-	entries := t.entriesByAccount[accountID]
+	entries := t.entriesByAccount[poolGlobalCacheKey]
 	if entries == nil {
 		entries = make(map[[32]byte]promptCacheEntry)
-		t.entriesByAccount[accountID] = entries
+		t.entriesByAccount[poolGlobalCacheKey] = entries
 	}
 
 	for _, breakpoint := range profile.Breakpoints {
