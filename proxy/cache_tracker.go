@@ -11,16 +11,7 @@ import (
 	"time"
 )
 
-const defaultPromptCacheTTL = 1 * time.Hour
-
-// poolGlobalCacheKey：缓存命中按"号池整体"算,而非单个账号。
-// 因为号池轮询每次换号,按账号记会导致缓存永远命中不了(同前缀到新账号就重写)。
-// 这套缓存是本地计费模拟(未转发上游),全局共享可大幅提升命中率(缓存读$0.5 替代缓存写$7.35)。
-const poolGlobalCacheKey = "__pool_global__"
-
-// autoInjectPromptCache：客户端没带 cache_control 时,自动把消息边界当作缓存点。
-// 让裸调请求(OpenAI兼容/不发缓存标记的客户端)也能命中缓存,命中率拉满("90%高缓")。
-const autoInjectPromptCache = true
+const defaultPromptCacheTTL = 5 * time.Minute
 
 // Anthropic requires cached prefixes to reach a minimum token count before
 // caching takes effect. Breakpoints below this threshold are excluded from
@@ -88,22 +79,6 @@ func (t *promptCacheTracker) BuildClaudeProfile(req *ClaudeRequest, totalInputTo
 	cumulativeTokens := 0
 	var activeTTL time.Duration
 
-	// 主动缓存:若整个请求没有任何显式 cache_control,则自动启用——
-	// 让每个消息边界成为缓存点(TTL 默认1h),裸调请求也能命中。
-	autoTTL := time.Duration(0)
-	if autoInjectPromptCache {
-		hasExplicit := false
-		for _, b := range blocks {
-			if b.TTL > 0 {
-				hasExplicit = true
-				break
-			}
-		}
-		if !hasExplicit {
-			autoTTL = defaultPromptCacheTTL
-		}
-	}
-
 	for _, block := range blocks {
 		canonical := canonicalizeCacheValue(block.Value)
 		writeHashChunk(hasher, canonical)
@@ -118,13 +93,8 @@ func (t *promptCacheTracker) BuildClaudeProfile(req *ClaudeRequest, totalInputTo
 		if block.TTL > 0 {
 			breakpointTTL = block.TTL
 			activeTTL = block.TTL
-		} else if block.IsMessageEnd {
-			if activeTTL > 0 {
-				breakpointTTL = activeTTL
-			} else if autoTTL > 0 {
-				// 主动注入:无显式缓存标记时,消息边界自动成为缓存点
-				breakpointTTL = autoTTL
-			}
+		} else if block.IsMessageEnd && activeTTL > 0 {
+			breakpointTTL = activeTTL
 		}
 
 		if breakpointTTL <= 0 {
@@ -169,9 +139,9 @@ func (t *promptCacheTracker) Compute(accountID string, profile *promptCacheProfi
 	defer t.mu.Unlock()
 	t.pruneExpiredLocked(now)
 
-	entries := t.entriesByAccount[poolGlobalCacheKey]
+	entries := t.entriesByAccount[accountID]
 	if len(entries) == 0 {
-		// First request for this prefix (pool-wide): report creation only if above threshold.
+		// First request for this account: report creation only if above threshold.
 		effectiveCreation := lastTokens
 		if effectiveCreation < minTokens {
 			effectiveCreation = 0
@@ -234,10 +204,10 @@ func (t *promptCacheTracker) Update(accountID string, profile *promptCacheProfil
 	defer t.mu.Unlock()
 	t.pruneExpiredLocked(now)
 
-	entries := t.entriesByAccount[poolGlobalCacheKey]
+	entries := t.entriesByAccount[accountID]
 	if entries == nil {
 		entries = make(map[[32]byte]promptCacheEntry)
-		t.entriesByAccount[poolGlobalCacheKey] = entries
+		t.entriesByAccount[accountID] = entries
 	}
 
 	for _, breakpoint := range profile.Breakpoints {
@@ -286,9 +256,13 @@ func flattenClaudeCacheBlocks(req *ClaudeRequest) []cacheablePromptBlock {
 		}
 		fingerprintValue := stripCachePositionKeys(toolValue)
 		blocks = append(blocks, cacheablePromptBlock{
-			Value:  fingerprintValue,
-			Tokens: estimateApproxTokens(canonicalizeCacheValue(fingerprintValue)),
-			TTL:    normalizePromptCacheTTL(extractPromptCacheTTL(tool)),
+			Value: fingerprintValue,
+			// 与 estimateClaudeRequestInputTokens 的工具估算口径一致(名称+描述+schema),
+			// 不估带元数据的 wrapper 串。
+			Tokens: estimateApproxTokens(tool.Name) +
+				estimateApproxTokens(tool.Description) +
+				estimateJSONTokens(tool.InputSchema),
+			TTL: normalizePromptCacheTTL(extractPromptCacheTTL(tool)),
 		})
 	}
 
@@ -396,10 +370,12 @@ func appendPromptBlock(blocks *[]cacheablePromptBlock, wrapper map[string]interf
 	}
 
 	fingerprintValue := stripCachePositionKeys(wrapper)
-	canonical := canonicalizeCacheValue(fingerprintValue)
 	*blocks = append(*blocks, cacheablePromptBlock{
-		Value:        fingerprintValue,
-		Tokens:       estimateApproxTokens(canonical),
+		Value: fingerprintValue,
+		// Token 估真实内容(与 estimateClaudeRequestInputTokens 同一套),不能估
+		// 带 kind/role/block 等元数据 + 大量 JSON 符号的 wrapper 串,否则虚高数倍,
+		// 撑爆 TotalInputTokens 导致缓存写暴扣。
+		Tokens:       estimateClaudeValueTokens(blockValue),
 		TTL:          ttl,
 		IsMessageEnd: isMessageEnd,
 	})
@@ -540,7 +516,29 @@ func billedClaudeInputTokens(inputTokens int, usage promptCacheUsage) int {
 	return maxInt(inputTokens-usage.CacheCreationInputTokens-usage.CacheReadInputTokens, 0)
 }
 
+// capCacheUsageToReal 把缓存读/写按真实输入 token 封顶。
+// estimateApproxTokens 对 canonical JSON(含大量符号)会高估,导致 TotalInputTokens
+// 远超真实输入,缓存写被算成输入的数倍(不可能,超上下文上限)→ 暴扣客户。
+// 上游按"上下文占用%"算出的 realInputTokens 才是真实上限:缓存读+写绝不能超过它。
+func capCacheUsageToReal(usage promptCacheUsage, realInputTokens int) promptCacheUsage {
+	if realInputTokens <= 0 {
+		return usage
+	}
+	cacheTotal := usage.CacheReadInputTokens + usage.CacheCreationInputTokens
+	if cacheTotal <= realInputTokens {
+		return usage
+	}
+	scale := float64(realInputTokens) / float64(cacheTotal)
+	usage.CacheReadInputTokens = int(float64(usage.CacheReadInputTokens) * scale)
+	usage.CacheCreationInputTokens = int(float64(usage.CacheCreationInputTokens) * scale)
+	usage.CacheCreation5mInputTokens = int(float64(usage.CacheCreation5mInputTokens) * scale)
+	usage.CacheCreation1hInputTokens = int(float64(usage.CacheCreation1hInputTokens) * scale)
+	return usage
+}
+
 func buildClaudeUsageMap(inputTokens, outputTokens int, usage promptCacheUsage, includeCache bool) map[string]interface{} {
+	// 封顶:缓存读+写绝不能超过真实输入(防 estimateApproxTokens 高估导致暴扣)
+	usage = capCacheUsageToReal(usage, inputTokens)
 	result := map[string]interface{}{
 		"input_tokens":  billedClaudeInputTokens(inputTokens, usage),
 		"output_tokens": outputTokens,

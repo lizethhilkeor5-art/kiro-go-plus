@@ -116,6 +116,13 @@ func estimateClaudeValueTokens(v interface{}) int {
 			if content, ok := value["content"]; ok {
 				return estimateClaudeValueTokens(content)
 			}
+		case "image":
+			// 图片按固定 token 估;绝不能把 base64 数据当文本估
+			// (一张图 base64 几十万字符,真实约 1600 token)。
+			return 1600
+		case "document":
+			// PDF/文档同理,base64 不能当文本估;给个保守固定值。
+			return 3000
 		}
 
 		total := 0

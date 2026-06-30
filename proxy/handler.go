@@ -1371,6 +1371,11 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, payload *KiroPayload
 		} else if inputTokens <= 0 {
 			inputTokens = estimatedInputTokens
 		}
+		// 按模型上下文上限封顶:模型物理上读不了超过上下文窗口的 token,
+		// 估算虚高或超大请求绝不能按虚数计费(否则一条请求几百万 token 暴扣)。
+		if maxCtx := getContextWindowSize(model); maxCtx > 0 && inputTokens > maxCtx {
+			inputTokens = maxCtx
+		}
 		outputContent, extractedReasoning := extractThinkingFromContent(rawContentBuilder.String())
 		thinkingOutput := rawThinkingBuilder.String()
 		if thinking && thinkingOutput == "" && extractedReasoning != "" {
@@ -1558,6 +1563,11 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, payload *KiroPayl
 			inputTokens = realInputTokens
 		} else if inputTokens <= 0 {
 			inputTokens = estimatedInputTokens
+		}
+		// 按模型上下文上限封顶:模型物理上读不了超过上下文窗口的 token,
+		// 估算虚高或超大请求绝不能按虚数计费(否则一条请求几百万 token 暴扣)。
+		if maxCtx := getContextWindowSize(model); maxCtx > 0 && inputTokens > maxCtx {
+			inputTokens = maxCtx
 		}
 		outputTokens = estimateClaudeOutputTokens(finalContent, rawThinkingContent, toolUses)
 
@@ -1993,6 +2003,11 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, payload *KiroPayload
 		} else if inputTokens <= 0 {
 			inputTokens = estimatedInputTokens
 		}
+		// 按模型上下文上限封顶:模型物理上读不了超过上下文窗口的 token,
+		// 估算虚高或超大请求绝不能按虚数计费(否则一条请求几百万 token 暴扣)。
+		if maxCtx := getContextWindowSize(model); maxCtx > 0 && inputTokens > maxCtx {
+			inputTokens = maxCtx
+		}
 		outputContent, extractedReasoning := extractThinkingFromContent(rawContentBuilder.String())
 		reasoningOutput := rawReasoningBuilder.String()
 		if thinking && reasoningOutput == "" && extractedReasoning != "" {
@@ -2107,6 +2122,11 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, payload *KiroPayl
 			inputTokens = realInputTokens
 		} else if inputTokens <= 0 {
 			inputTokens = estimatedInputTokens
+		}
+		// 按模型上下文上限封顶:模型物理上读不了超过上下文窗口的 token,
+		// 估算虚高或超大请求绝不能按虚数计费(否则一条请求几百万 token 暴扣)。
+		if maxCtx := getContextWindowSize(model); maxCtx > 0 && inputTokens > maxCtx {
+			inputTokens = maxCtx
 		}
 		outputTokens = estimateOpenAIOutputTokens(finalContent, reasoningContent, toolUses)
 
