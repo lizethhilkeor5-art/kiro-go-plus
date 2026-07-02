@@ -1366,10 +1366,13 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, payload *KiroPayload
 		}
 		closeActiveBlock()
 
-		if realInputTokens > 0 {
+		// 计费只按客户实际内容(kiro-go 估算),不计 Amazon Q 后端自带的系统 prompt 基线
+		// (每请求约 4-6k token,因模型而异,是 Q 侧固定、不可去除的开销)。
+		// 该基线由我们自行承担、不向客户计费。
+		inputTokens = estimatedInputTokens
+		if realInputTokens > 0 && realInputTokens < inputTokens {
+			// 兜底:估算偶尔高于 Q 实际总量时,以总量封顶,绝不超收。
 			inputTokens = realInputTokens
-		} else if inputTokens <= 0 {
-			inputTokens = estimatedInputTokens
 		}
 		// 按模型上下文上限封顶:模型物理上读不了超过上下文窗口的 token,
 		// 估算虚高或超大请求绝不能按虚数计费(否则一条请求几百万 token 暴扣)。
@@ -1559,10 +1562,13 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, payload *KiroPayl
 			rawThinkingContent = ""
 		}
 
-		if realInputTokens > 0 {
+		// 计费只按客户实际内容(kiro-go 估算),不计 Amazon Q 后端自带的系统 prompt 基线
+		// (每请求约 4-6k token,因模型而异,是 Q 侧固定、不可去除的开销)。
+		// 该基线由我们自行承担、不向客户计费。
+		inputTokens = estimatedInputTokens
+		if realInputTokens > 0 && realInputTokens < inputTokens {
+			// 兜底:估算偶尔高于 Q 实际总量时,以总量封顶,绝不超收。
 			inputTokens = realInputTokens
-		} else if inputTokens <= 0 {
-			inputTokens = estimatedInputTokens
 		}
 		// 按模型上下文上限封顶:模型物理上读不了超过上下文窗口的 token,
 		// 估算虚高或超大请求绝不能按虚数计费(否则一条请求几百万 token 暴扣)。
@@ -1998,10 +2004,13 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, payload *KiroPayload
 			sendChunk("", 3)
 		}
 
-		if realInputTokens > 0 {
+		// 计费只按客户实际内容(kiro-go 估算),不计 Amazon Q 后端自带的系统 prompt 基线
+		// (每请求约 4-6k token,因模型而异,是 Q 侧固定、不可去除的开销)。
+		// 该基线由我们自行承担、不向客户计费。
+		inputTokens = estimatedInputTokens
+		if realInputTokens > 0 && realInputTokens < inputTokens {
+			// 兜底:估算偶尔高于 Q 实际总量时,以总量封顶,绝不超收。
 			inputTokens = realInputTokens
-		} else if inputTokens <= 0 {
-			inputTokens = estimatedInputTokens
 		}
 		// 按模型上下文上限封顶:模型物理上读不了超过上下文窗口的 token,
 		// 估算虚高或超大请求绝不能按虚数计费(否则一条请求几百万 token 暴扣)。
@@ -2118,10 +2127,13 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, payload *KiroPayl
 			reasoningContent = ""
 		}
 
-		if realInputTokens > 0 {
+		// 计费只按客户实际内容(kiro-go 估算),不计 Amazon Q 后端自带的系统 prompt 基线
+		// (每请求约 4-6k token,因模型而异,是 Q 侧固定、不可去除的开销)。
+		// 该基线由我们自行承担、不向客户计费。
+		inputTokens = estimatedInputTokens
+		if realInputTokens > 0 && realInputTokens < inputTokens {
+			// 兜底:估算偶尔高于 Q 实际总量时,以总量封顶,绝不超收。
 			inputTokens = realInputTokens
-		} else if inputTokens <= 0 {
-			inputTokens = estimatedInputTokens
 		}
 		// 按模型上下文上限封顶:模型物理上读不了超过上下文窗口的 token,
 		// 估算虚高或超大请求绝不能按虚数计费(否则一条请求几百万 token 暴扣)。
